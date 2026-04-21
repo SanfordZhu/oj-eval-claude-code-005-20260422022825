@@ -189,7 +189,6 @@ bool QoiDecode(uint32_t &width, uint32_t &height, uint8_t &channels, uint8_t &co
     // read color space specifier
     colorspace = QoiReadU8();
 
-    int run = 0;
     int px_num = width * height;
 
     uint8_t history[64][4];
