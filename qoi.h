@@ -110,11 +110,16 @@ bool QoiEncode(uint32_t width, uint32_t height, uint8_t channels, uint8_t colors
             history[index][2] = b;
             history[index][3] = a;
 
-            // Calculate differences
-            int dr = r - pre_r;
-            int dg = g - pre_g;
-            int db = b - pre_b;
-            int da = a - pre_a;
+            // Calculate differences with wrap-around arithmetic as per QOI spec
+            int dr = (r - pre_r) & 0xff;
+            int dg = (g - pre_g) & 0xff;
+            int db = (b - pre_b) & 0xff;
+            int da = (a - pre_a) & 0xff;
+            // Convert to signed differences (-128..127)
+            if (dr > 127) dr -= 256;
+            if (dg > 127) dg -= 256;
+            if (db > 127) db -= 256;
+            if (da > 127) da -= 256;
 
             // Try DIFF encoding (-2..1 range) - only if alpha doesn't change
             if (da == 0 && dr >= -2 && dr <= 1 && dg >= -2 && dg <= 1 && db >= -2 && db <= 1) {
@@ -122,7 +127,7 @@ bool QoiEncode(uint32_t width, uint32_t height, uint8_t channels, uint8_t colors
             }
             // Try LUMA encoding - only if alpha doesn't change
             else if (da == 0) {
-                int dg2 = g - pre_g;
+                int dg2 = dg;  // Already computed with wrap-around
                 int dr_dg = dr - dg2;
                 int db_dg = db - dg2;
 
