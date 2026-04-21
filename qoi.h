@@ -116,11 +116,11 @@ bool QoiEncode(uint32_t width, uint32_t height, uint8_t channels, uint8_t colors
             int db = b - pre_b;
             int da = a - pre_a;
 
-            // Try DIFF encoding (-2..1 range)
-            if (dr >= -2 && dr <= 1 && dg >= -2 && dg <= 1 && db >= -2 && db <= 1 && da == 0) {
+            // Try DIFF encoding (-2..1 range) - only if alpha doesn't change
+            if (da == 0 && dr >= -2 && dr <= 1 && dg >= -2 && dg <= 1 && db >= -2 && db <= 1) {
                 QoiWriteU8(QOI_OP_DIFF_TAG | ((dr + 2) << 4) | ((dg + 2) << 2) | (db + 2));
             }
-            // Try LUMA encoding
+            // Try LUMA encoding - only if alpha doesn't change
             else if (da == 0) {
                 int dg2 = g - pre_g;
                 int dr_dg = dr - dg2;
@@ -130,21 +130,23 @@ bool QoiEncode(uint32_t width, uint32_t height, uint8_t channels, uint8_t colors
                     QoiWriteU8(QOI_OP_LUMA_TAG | (dg2 + 32));
                     QoiWriteU8(((dr_dg + 8) << 4) | (db_dg + 8));
                 } else {
-                    // LUMA failed, use RGB
+                    // LUMA failed, use RGB encoding (alpha doesn't change)
                     QoiWriteU8(QOI_OP_RGB_TAG);
                     QoiWriteU8(r);
                     QoiWriteU8(g);
                     QoiWriteU8(b);
                 }
             }
-            // Use RGB or RGBA encoding (when alpha changes or channels == 4)
+            // Alpha changed
             else {
                 if (channels == 3 || a == pre_a) {
+                    // RGB image or alpha didn't change (shouldn't reach here if a == pre_a since da != 0)
                     QoiWriteU8(QOI_OP_RGB_TAG);
                     QoiWriteU8(r);
                     QoiWriteU8(g);
                     QoiWriteU8(b);
                 } else {
+                    // RGBA image and alpha changed
                     QoiWriteU8(QOI_OP_RGBA_TAG);
                     QoiWriteU8(r);
                     QoiWriteU8(g);
