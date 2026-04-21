@@ -76,7 +76,83 @@ bool QoiEncode(uint32_t width, uint32_t height, uint8_t channels, uint8_t colors
         b = QoiReadU8();
         if (channels == 4) a = QoiReadU8();
 
-        // TODO
+        // Check if pixel matches previous pixel (RUN encoding)
+        if (r == pre_r && g == pre_g && b == pre_b && a == pre_a) {
+            run++;
+            if (run == 62 || i == px_num - 1) {
+                QoiWriteU8(QOI_OP_RUN_TAG | (run - 1));
+                run = 0;
+            }
+            pre_r = r;
+            pre_g = g;
+            pre_b = b;
+            pre_a = a;
+            continue;
+        }
+
+        // If we have an active run, write it
+        if (run > 0) {
+            QoiWriteU8(QOI_OP_RUN_TAG | (run - 1));
+            run = 0;
+        }
+
+        // Calculate hash index
+        int index = QoiColorHash(r, g, b, a);
+
+        // Check if pixel exists in history (INDEX encoding)
+        if (history[index][0] == r && history[index][1] == g &&
+            history[index][2] == b && history[index][3] == a) {
+            QoiWriteU8(QOI_OP_INDEX_TAG | index);
+        } else {
+            // Update history
+            history[index][0] = r;
+            history[index][1] = g;
+            history[index][2] = b;
+            history[index][3] = a;
+
+            // Calculate differences
+            int dr = r - pre_r;
+            int dg = g - pre_g;
+            int db = b - pre_b;
+            int da = a - pre_a;
+
+            // Try DIFF encoding (-2..1 range)
+            if (dr >= -2 && dr <= 1 && dg >= -2 && dg <= 1 && db >= -2 && db <= 1 && da == 0) {
+                QoiWriteU8(QOI_OP_DIFF_TAG | ((dr + 2) << 4) | ((dg + 2) << 2) | (db + 2));
+            }
+            // Try LUMA encoding
+            else if (da == 0) {
+                int dg2 = g - pre_g;
+                int dr_dg = dr - dg2;
+                int db_dg = db - dg2;
+
+                if (dg2 >= -32 && dg2 <= 31 && dr_dg >= -8 && dr_dg <= 7 && db_dg >= -8 && db_dg <= 7) {
+                    QoiWriteU8(QOI_OP_LUMA_TAG | (dg2 + 32));
+                    QoiWriteU8(((dr_dg + 8) << 4) | (db_dg + 8));
+                } else {
+                    // LUMA failed, use RGB
+                    QoiWriteU8(QOI_OP_RGB_TAG);
+                    QoiWriteU8(r);
+                    QoiWriteU8(g);
+                    QoiWriteU8(b);
+                }
+            }
+            // Use RGB or RGBA encoding (when alpha changes or channels == 4)
+            else {
+                if (channels == 3 || a == pre_a) {
+                    QoiWriteU8(QOI_OP_RGB_TAG);
+                    QoiWriteU8(r);
+                    QoiWriteU8(g);
+                    QoiWriteU8(b);
+                } else {
+                    QoiWriteU8(QOI_OP_RGBA_TAG);
+                    QoiWriteU8(r);
+                    QoiWriteU8(g);
+                    QoiWriteU8(b);
+                    QoiWriteU8(a);
+                }
+            }
+        }
 
         pre_r = r;
         pre_g = g;
@@ -119,10 +195,80 @@ bool QoiDecode(uint32_t &width, uint32_t &height, uint8_t &channels, uint8_t &co
 
     uint8_t r, g, b, a;
     a = 255u;
+    uint8_t pre_r = 0u, pre_g = 0u, pre_b = 0u, pre_a = 255u;
 
     for (int i = 0; i < px_num; ++i) {
+        uint8_t byte1 = QoiReadU8();
 
-        // TODO
+        if (byte1 == QOI_OP_RGB_TAG) {
+            r = QoiReadU8();
+            g = QoiReadU8();
+            b = QoiReadU8();
+        } else if (byte1 == QOI_OP_RGBA_TAG) {
+            r = QoiReadU8();
+            g = QoiReadU8();
+            b = QoiReadU8();
+            a = QoiReadU8();
+        } else {
+            uint8_t tag = byte1 & QOI_MASK_2;
+
+            if (tag == QOI_OP_INDEX_TAG) {
+                int index = byte1 & 0x3f;
+                r = history[index][0];
+                g = history[index][1];
+                b = history[index][2];
+                a = history[index][3];
+            } else if (tag == QOI_OP_DIFF_TAG) {
+                int dr = ((byte1 >> 4) & 0x03) - 2;
+                int dg = ((byte1 >> 2) & 0x03) - 2;
+                int db = (byte1 & 0x03) - 2;
+                r = pre_r + dr;
+                g = pre_g + dg;
+                b = pre_b + db;
+            } else if (tag == QOI_OP_LUMA_TAG) {
+                uint8_t byte2 = QoiReadU8();
+                int dg = (byte1 & 0x3f) - 32;
+                int dr_dg = ((byte2 >> 4) & 0x0f) - 8;
+                int db_dg = (byte2 & 0x0f) - 8;
+                int dr = dr_dg + dg;
+                int db = db_dg + dg;
+                r = pre_r + dr;
+                g = pre_g + dg;
+                b = pre_b + db;
+            } else if (tag == QOI_OP_RUN_TAG) {
+                int run_length = (byte1 & 0x3f) + 1;
+                // Write run_length copies of the previous pixel
+                for (int j = 0; j < run_length; j++) {
+                    QoiWriteU8(pre_r);
+                    QoiWriteU8(pre_g);
+                    QoiWriteU8(pre_b);
+                    if (channels == 4) QoiWriteU8(pre_a);
+
+                    // Update history for each repeated pixel
+                    int index = QoiColorHash(pre_r, pre_g, pre_b, pre_a);
+                    history[index][0] = pre_r;
+                    history[index][1] = pre_g;
+                    history[index][2] = pre_b;
+                    history[index][3] = pre_a;
+                }
+                // Skip the rest of the run in the loop
+                i += run_length - 1;
+                continue;
+            }
+        }
+
+        // Update history
+        int index = QoiColorHash(r, g, b, a);
+        history[index][0] = r;
+        history[index][1] = g;
+        history[index][2] = b;
+        history[index][3] = a;
+
+        // Update previous pixel
+        pre_r = r;
+        pre_g = g;
+        pre_b = b;
+        pre_a = a;
 
         QoiWriteU8(r);
         QoiWriteU8(g);
